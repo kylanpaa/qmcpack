@@ -32,6 +32,7 @@ MomentumEstimator::MomentumEstimator(ParticleSet& elns, TrialWaveFunction& psi)
   UpdateMode.set(COLLECTABLE,1);
   psi_ratios.resize(elns.getTotalNum());
   twist=elns.getTwist();
+  myName="nofk";
 }
 
 void MomentumEstimator::resetTargetParticleSet(ParticleSet& P)
@@ -79,7 +80,7 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
       RealType *restrict nofK_here=nofK.data();
       PosType *restrict nofk_grad_here=nofk_grad.data();
       Tensor<RealType,OHMMS_DIM> *restrict nofk_hess_here=nofk_hess.data();
-      #pragma omp simd aligned(nofK_here,nofk_grad_here,nofk_hess_here,phases_c,phases_s,phases_vPos_c,phases_vPos_s)
+      //#pragma omp simd aligned(nofK_here,nofk_grad_here,nofk_hess_here,phases_c,phases_s,phases_vPos_c,phases_vPos_s)
       for (int ik=0; ik<nk; ++ik)
       {
         PosType dr = (vPos[s]-P.R[i]);
@@ -92,9 +93,8 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
         for (int ii=0; ii<OHMMS_DIM; ++ii)
           for (int jj=ii; jj<OHMMS_DIM; ++jj)
           {
+            // only fill half, since symmetric
             nofk_hess_here[ik](ii,jj)+=-dr[ii]*dr[jj]*exp_a;
-            if (ii != jj)
-              nofk_hess_here[ik](jj,ii)=nofk_hess_here[ik](ii,jj);
           }
       }
     }
@@ -105,6 +105,19 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
     int j=myIndex;
     for (int ik=0; ik<nofK.size(); ++ik,++j)
       P.Collectables[j]+= w*nofK[ik];
+    for (int ik=0; ik<nofk_grad.size(); ++ik)
+      for (int i=0; i<OHMMS_DIM; ++i)
+      {
+        P.Collectables[j]+= w*nofk_grad[ik][i];
+        j+=1;
+      }    
+    for (int ik=0; ik<nofk_hess.size(); ++ik)
+      for (int i=0; i<OHMMS_DIM; ++i)
+        for (int ii=i; ii<OHMMS_DIM; ++ii)
+        {
+          P.Collectables[j]+= w*nofk_hess[ik](i,ii);
+          j+=1;
+        }
   }
   else
   {
@@ -121,7 +134,7 @@ void MomentumEstimator::registerCollectables(std::vector<observable_helper*>& h5
   
   if (hdf5_out)
   {
-    hid_t sgid=H5Gcreate(gid,"nofk_data",0);
+    hid_t sgid=H5Gcreate(gid,myName.c_str(),0);
     
     //descriptor for the data, 1-D data
     std::vector<int> ng(1);
@@ -143,31 +156,14 @@ void MomentumEstimator::registerCollectables(std::vector<observable_helper*>& h5
     h5o->open(sgid);
     h5desc.push_back(h5o);
     
-    std::vector<int> ng3(3);
     //add nofk_hess
-    ng3[0]=nofk_hess.size();
-    ng3[1]=OHMMS_DIM;
-    ng3[2]=OHMMS_DIM;
+    ng2[0]=nofk_hess.size();
+    ng2[1]=OHMMS_DIM*(OHMMS_DIM-1); //half of the tensor
     h5o=new observable_helper("nofk_hess");
-    h5o->set_dimensions(ng3,myIndex+nofK.size()+nofk_grad.size());
+    h5o->set_dimensions(ng2,myIndex+nofK.size()+nofk_grad.size());
     h5o->open(sgid);
-    h5desc.push_back(h5o);    
-  }
-  /*
-  if (hdf5_out)
-  {
-    //descriptor for the data, 1-D data
-    std::vector<int> ng(1);
-    //add nofk
-    ng[0]=nofK.size();
-    observable_helper* h5o=new observable_helper("nofk");
-    h5o->set_dimensions(ng,myIndex);
-    h5o->open(gid);
-    h5o->addProperty(const_cast<std::vector<PosType>&>(kPoints),"kpoints");
-    h5o->addProperty(const_cast<std::vector<int>&>(kWeights),"kweights");
     h5desc.push_back(h5o);
   }
-  */
 }
 
 
@@ -177,9 +173,10 @@ void MomentumEstimator::addObservables(PropertySetType& plist, BufferType& colle
   {
     myIndex=collectables.size();
     collectables.add(nofK.begin(),nofK.end());
-    //collectables.add(nofk_grad.first_address(),nofk_grad.last_address());
-    //collectables.add(nofk_grad.begin(),nofk_grad.end());
-    //collectables.add(nofk_hess.begin(),nofk_hess.end());
+    std::vector<RealType> tmp(OHMMS_DIM*nofk_grad.size());
+    collectables.add(tmp.begin(),tmp.end());
+    std::vector<RealType> tmp2(nofk_hess.size()*OHMMS_DIM*(OHMMS_DIM-1));
+    collectables.add(tmp2.begin(),tmp2.end());
   }
   else
   {
@@ -192,8 +189,6 @@ void MomentumEstimator::addObservables(PropertySetType& plist, BufferType& colle
     }
   }
 }
-
-
 
 void MomentumEstimator::setObservables(PropertySetType& plist)
 {
@@ -231,6 +226,7 @@ bool MomentumEstimator::putSpecial(xmlNodePtr cur, ParticleSet& elns, bool rootN
   pAttrib.add(kmax1,"kmax1");
   pAttrib.add(kmax2,"kmax2");
   pAttrib.add(M,"samples"); // default value is 40 (in the constructor)
+  pAttrib.add(myName,"name");
   pAttrib.put(cur);
   hdf5_out = (hdf5_flag=="yes");
   // minimal length as 2 x WS radius.

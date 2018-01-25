@@ -76,10 +76,9 @@ public:
   ///nofK
   aligned_vector<RealType> nofK;
   ///Gradient of nofK
-  //std::vector<PosType> nofk_grad;
-  Vector<PosType> nofk_grad;
+  std::vector<PosType> nofk_grad;
   ///Hessian of nofK
-  Vector<Tensor<RealType,OHMMS_DIM>> nofk_hess;
+  std::vector<Tensor<RealType,OHMMS_DIM>> nofk_hess;
   /// print to hdf5 or scalar.dat
   bool hdf5_out;
   PosType twist;

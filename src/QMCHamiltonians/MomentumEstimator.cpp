@@ -195,6 +195,10 @@ void MomentumEstimator::setObservables(PropertySetType& plist)
   if (!hdf5_out)
   {
     copy(nofK.begin(),nofK.end(),plist.begin()+myIndex);
+    //std::vector<RealType> tmp(OHMMS_DIM*nofk_grad.size());
+    //copy(tmp.begin(),tmp.end(),plist.begin()+myIndex+tmp.size());
+    //std::vector<RealType> tmp2(nofk_hess.size()*OHMMS_DIM*(OHMMS_DIM-1));
+    //copy(tmp2.begin(),tmp2.end(),plist.begin()+myIndex+nofK.size()+tmp2.size());
   }
 }
 
@@ -204,6 +208,10 @@ void MomentumEstimator::setParticlePropertyList(PropertySetType& plist
   if (!hdf5_out)
   {
     copy(nofK.begin(),nofK.end(),plist.begin()+myIndex+offset);
+    //std::vector<RealType> tmp(OHMMS_DIM*nofk_grad.size());
+    //copy(tmp.begin(),tmp.end(),plist.begin()+myIndex+tmp.size()+offset);
+    //std::vector<RealType> tmp2(nofk_hess.size()*OHMMS_DIM*(OHMMS_DIM-1));
+    //copy(tmp2.begin(),tmp2.end(),plist.begin()+myIndex+nofK.size()+tmp2.size()+offset);
   }
 }
 

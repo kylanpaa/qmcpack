@@ -76,9 +76,11 @@ public:
   ///nofK
   aligned_vector<RealType> nofK;
   ///Gradient of nofK
-  std::vector<PosType> nofk_grad;
+  VectorSoaContainer<RealType,OHMMS_DIM> nofk_grad;
   ///Hessian of nofK
-  std::vector<Tensor<RealType,OHMMS_DIM>> nofk_hess;
+  VectorSoaContainer<RealType,OHMMS_DIM*(OHMMS_DIM+1)/2> nofk_hess;
+  /// temperal array
+  VectorSoaContainer<RealType,2> temp;
   /// print to hdf5 or scalar.dat
   bool hdf5_out;
   PosType twist;

@@ -60,9 +60,14 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
     eval_e2iphi(nk, kdotp.data(), phases_vPos[s].data(0), phases_vPos[s].data(1));
   }
 
-  std::fill_n(nofK.begin(),nk,RealType(0));
-  std::fill_n(nofk_grad.begin(),nk,PosType(0));
-  std::fill_n(nofk_hess.begin(),nk,Tensor<RealType,OHMMS_DIM>(0));
+  constexpr int total_dim = OHMMS_DIM*(OHMMS_DIM+1)/2;
+  const RealType czero(0);
+  std::fill_n(nofK.data(), nk, czero);
+  for(int idim=0; idim<OHMMS_DIM; ++idim)
+    std::fill_n(nofk_grad.data(idim), nk, czero);
+  for(int idim=0; idim<total_dim; ++idim)
+    std::fill_n(nofk_hess.data(idim), nk, czero);
+
   for (int i=0; i<np; ++i)
   {
     for (int ik=0; ik<nk; ++ik)
@@ -70,6 +75,7 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
     eval_e2iphi(nk, kdotp.data(), phases.data(0), phases.data(1));
     for (int s=0; s<M; ++s)
     {
+      PosType dr = (vPos[s]-P.R[i]);
       const ComplexType one_ratio(psi_ratios_all[s][i]);
       const RealType ratio_c = one_ratio.real();
       const RealType ratio_s = one_ratio.imag();
@@ -77,25 +83,42 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
       const RealType *restrict phases_s = phases.data(1);
       const RealType *restrict phases_vPos_c = phases_vPos[s].data(0);
       const RealType *restrict phases_vPos_s = phases_vPos[s].data(1);
-      RealType *restrict nofK_here=nofK.data();
-      PosType *restrict nofk_grad_here=nofk_grad.data();
-      Tensor<RealType,OHMMS_DIM> *restrict nofk_hess_here=nofk_hess.data();
-      //#pragma omp simd aligned(nofK_here,nofk_grad_here,nofk_hess_here,phases_c,phases_s,phases_vPos_c,phases_vPos_s)
+      RealType *restrict temp_c = temp.data(0);
+      RealType *restrict temp_s = temp.data(1);
+      #pragma omp simd aligned(phases_c,phases_s,phases_vPos_c,phases_vPos_s,temp_c,temp_s)
       for (int ik=0; ik<nk; ++ik)
       {
-        PosType dr = (vPos[s]-P.R[i]);
-        RealType exp_a = ( phases_c[ik]*phases_vPos_c[ik] - phases_s[ik]*phases_vPos_s[ik] ) * ratio_c
-                       - ( phases_s[ik]*phases_vPos_c[ik] + phases_c[ik]*phases_vPos_s[ik] ) * ratio_s ;
-        nofK_here[ik] += exp_a;
-        nofk_grad_here[ik] += dr*( ( phases_s[ik]*phases_vPos_c[ik] + phases_c[ik]*phases_vPos_s[ik] ) * ratio_c
-                                   -( phases_s[ik]*phases_vPos_s[ik] - phases_c[ik]*phases_vPos_c[ik] ) * ratio_s );
-	
-        for (int ii=0; ii<OHMMS_DIM; ++ii)
-          for (int jj=ii; jj<OHMMS_DIM; ++jj)
-          {
-            // only fill half, since symmetric
-            nofk_hess_here[ik](ii,jj)+=-dr[ii]*dr[jj]*exp_a;
-          }
+        temp_c[ik] = phases_c[ik]*phases_vPos_c[ik] - phases_s[ik]*phases_vPos_s[ik];
+        temp_s[ik] = phases_s[ik]*phases_vPos_c[ik] + phases_c[ik]*phases_vPos_s[ik];
+      }
+      // compute the grad
+      for (int ii=0; ii<OHMMS_DIM; ++ii)
+      {
+        RealType *restrict nofk_grad_here=nofk_grad.data(ii);
+        #pragma omp simd aligned(nofk_grad_here,temp_c,temp_s)
+        for (int ik=0; ik<nk; ++ik)
+          nofk_grad_here[ik] += dr[ii] * ( temp_s[ik] * ratio_c + temp_c[ik] * ratio_s );
+      }
+      // compute the val
+      RealType *restrict nofK_here=nofK.data();
+      #pragma omp simd aligned(nofK_here,temp_c,temp_s)
+      for (int ik=0; ik<nk; ++ik)
+      {
+        temp_c[ik] = temp_c[ik] * ratio_c - temp_s[ik] * ratio_s;
+        nofK_here[ik] += temp_c[ik];
+      }
+      // compute the hess
+      RealType prefactor[total_dim];
+      int ind=0;
+      for (int ii=0; ii<OHMMS_DIM; ++ii)
+        for (int jj=ii; jj<OHMMS_DIM; ++jj)
+          prefactor[ind++] = -dr[ii]*dr[jj];
+      for (int ii=0; ii<total_dim; ++ii)
+      {
+        RealType *restrict nofk_hess_here=nofk_hess.data(ii);
+        #pragma omp simd aligned(nofk_hess_here,phases_c)
+        for (int ik=0; ik<nk; ++ik)
+          nofk_hess_here[ik] += prefactor[ii] * phases_c[ik];
       }
     }
   }
@@ -103,21 +126,27 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
   {
     RealType w=tWalker->Weight*norm_nofK;
     int j=myIndex;
-    for (int ik=0; ik<nofK.size(); ++ik,++j)
+    // val
+    for (int ik=0; ik<nk; ++ik, ++j)
       P.Collectables[j]+= w*nofK[ik];
-    for (int ik=0; ik<nofk_grad.size(); ++ik)
-      for (int i=0; i<OHMMS_DIM; ++i)
-      {
-        P.Collectables[j]+= w*nofk_grad[ik][i];
-        j+=1;
-      }    
-    for (int ik=0; ik<nofk_hess.size(); ++ik)
-      for (int i=0; i<OHMMS_DIM; ++i)
-        for (int ii=i; ii<OHMMS_DIM; ++ii)
-        {
-          P.Collectables[j]+= w*nofk_hess[ik](i,ii);
-          j+=1;
-        }
+    // grad
+    for (int i=0; i<OHMMS_DIM; ++i)
+    {
+      RealType *restrict nofk_grad_here=nofk_grad.data(i);
+      const int myIndex_grad = myIndex + nk;
+      j=myIndex_grad+i;
+      for (int ik=0; ik<nk; ++ik, j+=OHMMS_DIM)
+        P.Collectables[j]+= w*nofk_grad_here[ik];
+    }
+    // hess
+    for (int i=0; i<total_dim; ++i)
+    {
+      RealType *restrict nofk_hess_here=nofk_hess.data(i);
+      const int myIndex_hess = myIndex + nk*(OHMMS_DIM+1);
+      j=myIndex_hess+i;
+      for (int ik=0; ik<nk; ++ik, j+=total_dim)
+        P.Collectables[j]+= w*nofk_hess_here[ik];
+    }
   }
   else
   {
@@ -158,9 +187,9 @@ void MomentumEstimator::registerCollectables(std::vector<observable_helper*>& h5
     
     //add nofk_hess
     ng2[0]=nofk_hess.size();
-    ng2[1]=OHMMS_DIM*(OHMMS_DIM-1); //half of the tensor
+    ng2[1]=OHMMS_DIM*(OHMMS_DIM+1)/2; //half of the tensor
     h5o=new observable_helper("nofk_hess");
-    h5o->set_dimensions(ng2,myIndex+nofK.size()+nofk_grad.size());
+    h5o->set_dimensions(ng2,myIndex+nofK.size()*(OHMMS_DIM+1));
     h5o->open(sgid);
     h5desc.push_back(h5o);
   }
@@ -172,11 +201,9 @@ void MomentumEstimator::addObservables(PropertySetType& plist, BufferType& colle
   if (hdf5_out)
   {
     myIndex=collectables.size();
-    collectables.add(nofK.begin(),nofK.end());
-    std::vector<RealType> tmp(OHMMS_DIM*nofk_grad.size());
+    // reserve space
+    std::vector<RealType> tmp(nofK.size()*(OHMMS_DIM+1)*(OHMMS_DIM+2)/2);
     collectables.add(tmp.begin(),tmp.end());
-    std::vector<RealType> tmp2(nofk_hess.size()*OHMMS_DIM*(OHMMS_DIM-1));
-    collectables.add(tmp2.begin(),tmp2.end());
   }
   else
   {
@@ -195,10 +222,7 @@ void MomentumEstimator::setObservables(PropertySetType& plist)
   if (!hdf5_out)
   {
     copy(nofK.begin(),nofK.end(),plist.begin()+myIndex);
-    //std::vector<RealType> tmp(OHMMS_DIM*nofk_grad.size());
-    //copy(tmp.begin(),tmp.end(),plist.begin()+myIndex+tmp.size());
-    //std::vector<RealType> tmp2(nofk_hess.size()*OHMMS_DIM*(OHMMS_DIM-1));
-    //copy(tmp2.begin(),tmp2.end(),plist.begin()+myIndex+nofK.size()+tmp2.size());
+    // need to add grad and hess
   }
 }
 
@@ -208,10 +232,7 @@ void MomentumEstimator::setParticlePropertyList(PropertySetType& plist
   if (!hdf5_out)
   {
     copy(nofK.begin(),nofK.end(),plist.begin()+myIndex+offset);
-    //std::vector<RealType> tmp(OHMMS_DIM*nofk_grad.size());
-    //copy(tmp.begin(),tmp.end(),plist.begin()+myIndex+tmp.size()+offset);
-    //std::vector<RealType> tmp2(nofk_hess.size()*OHMMS_DIM*(OHMMS_DIM-1));
-    //copy(tmp2.begin(),tmp2.end(),plist.begin()+myIndex+nofK.size()+tmp2.size()+offset);
+    // need to add grad and hess
   }
 }
 
@@ -472,6 +493,7 @@ bool MomentumEstimator::putSpecial(xmlNodePtr cur, ParticleSet& elns, bool rootN
   kdotp.resize(kPoints.size());
   vPos.resize(M);
   phases.resize(kPoints.size());
+  temp.resize(kPoints.size());
   phases_vPos.resize(M);
   for(int im=0; im<M; im++)
     phases_vPos[im].resize(kPoints.size());
@@ -505,6 +527,7 @@ void MomentumEstimator::resize(const std::vector<PosType>& kin, const int Min)
   nofk_hess.resize(kin.size());
   kdotp.resize(kPoints.size());
   phases.resize(kPoints.size());
+  temp.resize(kPoints.size());
   //M
   M=Min;
   vPos.resize(M);

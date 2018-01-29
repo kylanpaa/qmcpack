@@ -75,7 +75,8 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
     eval_e2iphi(nk, kdotp.data(), phases.data(0), phases.data(1));
     for (int s=0; s<M; ++s)
     {
-      PosType dr = (vPos[s]-P.R[i]);
+      PosType dr = vPos[s]-P.R[i];
+      P.Lattice.applyMinimumImage(dr);
       const ComplexType one_ratio(psi_ratios_all[s][i]);
       const RealType ratio_c = one_ratio.real();
       const RealType ratio_s = one_ratio.imag();
@@ -116,9 +117,9 @@ MomentumEstimator::Return_t MomentumEstimator::evaluate(ParticleSet& P)
       for (int ii=0; ii<total_dim; ++ii)
       {
         RealType *restrict nofk_hess_here=nofk_hess.data(ii);
-        #pragma omp simd aligned(nofk_hess_here,phases_c)
+        #pragma omp simd aligned(nofk_hess_here,temp_c)
         for (int ik=0; ik<nk; ++ik)
-          nofk_hess_here[ik] += prefactor[ii] * phases_c[ik];
+          nofk_hess_here[ik] += prefactor[ii] * temp_c[ik];
       }
     }
   }
